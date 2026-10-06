@@ -139,14 +139,11 @@ The application will open in your browser at `http://localhost:8501`.
 
 To demonstrate the full power and reliability of RepoLens:
 
-1. **Upload Codebase:** Select a sample project containing:
-   - `README.md`
-   - `backend/server.js`
-   - `backend/auth.js`
-   - `backend/middleware.js`
-   - `backend/database.js`
-   - `frontend/app.js`
-2. **Click "Index Repository":** Watch the system parse files, create chunks, generate embeddings, and populate FAISS.
+1. **Ingest Codebase (3 Options):**
+   - **Option A (Local Folder - Recommended):** Enter the local path to any repository (or click `"📁 Use Built-in Demo Repo ('sample_repo')"`), preview detected files, and click `"🚀 Index Repository Folder"`.
+   - **Option B (Repository ZIP):** Upload any project `.zip` archive (e.g. downloaded from GitHub) and click `"🚀 Index ZIP Repository"`.
+   - **Option C (Loose Files):** Select individual files from disk.
+2. **Indexing:** Watch RepoLens crawl directory trees, filter secret/ignored files (`.git`, `node_modules`, `.env`), chunk code, compute embeddings, and build the FAISS index.
 3. **Ask Question 1 (Overview):**
    > *"What does this project do?"*
    - Observe the answer synthesized from `README.md`.
