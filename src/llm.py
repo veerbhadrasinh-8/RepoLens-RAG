@@ -13,14 +13,14 @@ Role of the LLM:
 """
 
 import os
-from typing import Optional
+from typing import Optional, List, Any
 from dotenv import load_dotenv
 
 # Ensure environment variables are loaded
 load_dotenv()
 
-DEFAULT_MODEL = "gemini-2.5-flash"
-FALLBACK_MODEL = "gemini-1.5-flash"
+DEFAULT_MODEL = "gemini-3.8-flash"
+FALLBACK_MODELS = ["gemini-2.0-flash", "gemini-1.5-flash"]
 
 
 class GeminiAPIKeyError(Exception):
@@ -50,6 +50,28 @@ def is_gemini_configured() -> bool:
     return get_gemini_api_key() is not None
 
 
+def extract_content_text(content: Any) -> str:
+    """Extract plain string text from LLM response content.
+
+    Handles string, list of message chunk dicts, and multimodal response objects.
+    """
+    if isinstance(content, str):
+        return content.strip()
+
+    if isinstance(content, list):
+        parts: List[str] = []
+        for part in content:
+            if isinstance(part, dict) and "text" in part:
+                parts.append(str(part["text"]))
+            elif isinstance(part, str):
+                parts.append(part)
+            elif hasattr(part, "text"):
+                parts.append(str(getattr(part, "text")))
+        return "".join(parts).strip()
+
+    return str(content).strip()
+
+
 def get_llm(
     model_name: str = DEFAULT_MODEL,
     temperature: float = 0.2,
@@ -58,7 +80,7 @@ def get_llm(
     """Initialize the ChatGoogleGenerativeAI instance.
 
     Args:
-        model_name: Gemini model name (default: gemini-2.5-flash).
+        model_name: Gemini model name (default: gemini-3.8-flash).
         temperature: Sampling temperature (0.2 ensures factual, deterministic code answers).
         api_key: Optional override for the API key.
 
@@ -93,6 +115,7 @@ def generate_answer(
     """Send prompt to Gemini and return the natural-language answer.
 
     Catches and formats API errors gracefully without exposing sensitive credentials.
+    Automatically tries fallback models if the requested model returns 404/NOT_FOUND.
     """
     active_key = api_key or get_gemini_api_key()
     if not active_key:
@@ -100,21 +123,24 @@ def generate_answer(
             "Gemini API key is not configured. Please add GEMINI_API_KEY to .env."
         )
 
-    try:
-        llm = get_llm(model_name=model_name, api_key=active_key)
-        response = llm.invoke(prompt_text)
-        return response.content.strip() if hasattr(response, "content") else str(response).strip()
-    except Exception as e:
-        err_msg = str(e)
-        # Check for model not found or fallback
-        if "not found" in err_msg.lower() and model_name != FALLBACK_MODEL:
-            try:
-                fallback_llm = get_llm(model_name=FALLBACK_MODEL, api_key=active_key)
-                response = fallback_llm.invoke(prompt_text)
-                return response.content.strip() if hasattr(response, "content") else str(response).strip()
-            except Exception as fb_err:
-                err_msg = str(fb_err)
+    models_to_try = [model_name] + [m for m in FALLBACK_MODELS if m != model_name]
+    last_error = None
 
-        # Sanitize error to prevent leaking partial keys
-        clean_err = err_msg.replace(active_key, "[REDACTED_API_KEY]")
-        raise RuntimeError(f"Gemini API error: {clean_err}")
+    for candidate_model in models_to_try:
+        try:
+            llm = get_llm(model_name=candidate_model, api_key=active_key)
+            response = llm.invoke(prompt_text)
+            content = getattr(response, "content", response)
+            return extract_content_text(content)
+        except Exception as e:
+            last_error = e
+            err_msg = str(e).lower()
+            # If model is not found, try next candidate model
+            if "not found" in err_msg or "404" in err_msg or "not available" in err_msg:
+                continue
+            else:
+                # If it's a quota or auth error, do not keep looping needlessly
+                break
+
+    clean_err = str(last_error).replace(active_key, "[REDACTED_API_KEY]")
+    raise RuntimeError(f"Gemini API error: {clean_err}")

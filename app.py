@@ -103,7 +103,7 @@ def render_sidebar():
     st.sidebar.subheader("🤖 LLM Model")
     llm_model = st.sidebar.selectbox(
         "Gemini Model",
-        options=["gemini-2.5-flash", "gemini-1.5-flash"],
+        options=["gemini-3.8-flash", "gemini-2.0-flash", "gemini-1.5-flash"],
         index=0,
     )
 
