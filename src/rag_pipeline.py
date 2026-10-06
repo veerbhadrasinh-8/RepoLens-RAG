@@ -19,7 +19,7 @@ from typing import List, Dict, Any, Optional
 from langchain_core.documents import Document
 from langchain_community.vectorstores import FAISS
 
-from src.loader import load_from_uploaded_files, load_from_directory
+from src.loader import load_from_uploaded_files, load_from_directory, load_from_zip
 from src.chunker import split_documents, get_chunking_stats, DEFAULT_CHUNK_SIZE, DEFAULT_CHUNK_OVERLAP
 from src.embeddings import get_embedding_model
 from src.vector_store import (
@@ -112,6 +112,22 @@ class RepoLensPipeline:
     ) -> Dict[str, Any]:
         """Load files from local directory and index them."""
         documents = load_from_directory(directory_path)
+        return self.index_documents(
+            documents,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            persist=persist,
+        )
+
+    def index_from_zip(
+        self,
+        zip_source,
+        chunk_size: int = DEFAULT_CHUNK_SIZE,
+        chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
+        persist: bool = True,
+    ) -> Dict[str, Any]:
+        """Load files from a ZIP archive and index them."""
+        documents = load_from_zip(zip_source)
         return self.index_documents(
             documents,
             chunk_size=chunk_size,

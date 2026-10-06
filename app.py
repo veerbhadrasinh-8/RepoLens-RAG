@@ -2,13 +2,19 @@
 
 Provides the web UI for repository indexing, question answering,
 retrieval inspection, and parameter configuration.
+Supports indexing whole repository folders, uploaded ZIP archives, or individual files.
 """
 
 import os
 import streamlit as st
 from dotenv import load_dotenv
 
-from src.loader import load_from_uploaded_files, load_from_directory
+from src.loader import (
+    load_from_uploaded_files,
+    load_from_directory,
+    load_from_zip,
+    scan_directory_summary,
+)
 from src.rag_pipeline import RepoLensPipeline
 from src.llm import is_gemini_configured, get_gemini_api_key
 
@@ -36,11 +42,12 @@ st.markdown("""
         font-family: monospace;
         font-size: 0.9rem;
     }
-    .metric-card {
-        padding: 12px;
-        background-color: #1e2530;
-        border-radius: 8px;
-        border-left: 4px solid #4CAF50;
+    .file-badge {
+        font-family: monospace;
+        background-color: #1e2633;
+        padding: 2px 6px;
+        border-radius: 4px;
+        margin-right: 6px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -53,6 +60,8 @@ if "last_result" not in st.session_state:
     st.session_state["last_result"] = None
 if "selected_query" not in st.session_state:
     st.session_state["selected_query"] = ""
+if "folder_path_input" not in st.session_state:
+    st.session_state["folder_path_input"] = "sample_repo"
 
 
 def render_sidebar():
@@ -128,83 +137,142 @@ def main():
 
     st.title("🔍 RepoLens")
     st.markdown("### AI Codebase & Documentation Assistant")
-    st.caption("Upload code & docs, index into local vector database, and ask grounded questions without hallucinations.")
+    st.caption("Index entire repository folders, local projects, or ZIP archives into local FAISS and ask grounded code questions.")
 
     st.markdown("---")
 
-    # Section 1: Ingest Repository Files
-    st.subheader("1. Ingest Repository Files")
+    # Section 1: Ingest Repository
+    st.subheader("1. Ingest Repository")
 
-    tab_upload, tab_sample = st.tabs(["📁 Upload Local Files", "📦 Load Sample Demo Repo"])
+    # Top Status Bar
+    status_badge = "🟢 Indexed" if pipeline.is_indexed() else "⚪ Not Indexed"
+    st.info(
+        f"**Repository Status:** {status_badge}  |  "
+        f"**Indexed Files:** `{pipeline.indexed_files_count}`  |  "
+        f"**Chunks in Vector DB:** `{pipeline.indexed_chunks_count}`"
+    )
 
-    uploaded_files = []
-    load_sample_clicked = False
+    tab_folder, tab_zip, tab_files = st.tabs([
+        "📂 Local Repository Folder",
+        "🗜️ Upload Repository ZIP (.zip)",
+        "📄 Upload Loose Files",
+    ])
 
-    with tab_upload:
-        uploaded_files = st.file_uploader(
-            "Select repository files to index",
-            accept_multiple_files=True,
-            type=["py", "js", "jsx", "ts", "tsx", "html", "css", "md", "txt", "json", "java", "cpp", "c", "sql"],
-            help="Supported: .py, .js, .jsx, .ts, .tsx, .html, .css, .md, .txt, .json, .java, .cpp, .c, .sql. Secrets & ignored folders are automatically filtered.",
+    # --- TAB 1: LOCAL REPOSITORY FOLDER ---
+    with tab_folder:
+        st.markdown("Provide the local folder path to any repository on your machine. All subfolders and supported code files will be indexed automatically.")
+
+        # Preset shortcuts
+        btn_col1, btn_col2 = st.columns([1, 1])
+        with btn_col1:
+            if st.button("📁 Use Built-in Demo Repo ('sample_repo')", use_container_width=True):
+                st.session_state["folder_path_input"] = "sample_repo"
+                st.rerun()
+        with btn_col2:
+            if st.button("📍 Use Current Project Folder ('.')", use_container_width=True):
+                st.session_state["folder_path_input"] = "."
+                st.rerun()
+
+        folder_path = st.text_input(
+            "Enter local repository folder path:",
+            value=st.session_state.get("folder_path_input", "sample_repo"),
+            placeholder="e.g. sample_repo, ./my-project, /Users/username/projects/my-repo",
+            help="Provide absolute or relative directory path to the repository root.",
         )
 
-    with tab_sample:
-        st.markdown("Load pre-configured demo repository (`TaskFlow` sample: `server.js`, `auth.js`, `middleware.js`, `database.js`, `app.js`, `README.md`).")
-        load_sample_clicked = st.button("📥 Load Sample Repo Files", key="load_sample_btn")
+        # Live directory inspection
+        if folder_path.strip():
+            summary = scan_directory_summary(folder_path.strip())
+            if summary["exists"]:
+                st.success(
+                    f"✅ Found **{summary['file_count']}** supported code/doc files in `{folder_path}` "
+                    f"(ignored `node_modules`, `.git`, `.venv`, `.env` automatically)."
+                )
+                with st.expander("👀 Preview detected files in folder", expanded=False):
+                    for f in summary["supported_files"][:30]:
+                        st.markdown(f"- `{f}`")
+                    if len(summary["supported_files"]) > 30:
+                        st.caption(f"... and {len(summary['supported_files']) - 30} more files.")
+            else:
+                st.error(f"❌ Directory path `{folder_path}` does not exist on disk.")
 
-    col_btn, col_stats = st.columns([1, 2])
-
-    with col_btn:
-        index_btn = st.button("🚀 Index Repository", use_container_width=True, type="primary")
-
-    with col_stats:
-        status_badge = "🟢 Indexed" if pipeline.is_indexed() else "⚪ Not Indexed"
-        st.markdown(
-            f"**Repository Status:** {status_badge}  |  "
-            f"**Files:** `{pipeline.indexed_files_count}`  |  "
-            f"**Chunks:** `{pipeline.indexed_chunks_count}`"
-        )
-
-    # Handle Indexing Action
-    if index_btn:
-        if not uploaded_files:
-            st.warning("Please upload repository files first.")
-        else:
-            with st.spinner("Processing files, generating embeddings, and building FAISS index..."):
-                docs = load_from_uploaded_files(uploaded_files)
-                if not docs:
-                    st.error("No valid supported files found in upload. Supported: .py, .js, .ts, .html, .css, .md, .txt, .json, etc.")
-                else:
+        if st.button("🚀 Index Repository Folder", type="primary", use_container_width=True):
+            if not folder_path.strip() or not os.path.isdir(folder_path.strip()):
+                st.error(f"Directory path '{folder_path}' does not exist or is not a folder.")
+            else:
+                with st.spinner(f"Scanning and indexing folder '{folder_path}' into FAISS..."):
                     try:
-                        stats = pipeline.index_documents(
-                            docs,
+                        stats = pipeline.index_from_directory(
+                            folder_path.strip(),
                             chunk_size=settings["chunk_size"],
                             chunk_overlap=settings["chunk_overlap"],
                         )
                         st.success(
-                            f"Successfully indexed {stats['files_indexed']} files into {stats['chunks_created']} chunks!"
+                            f"🎉 Repository indexed successfully! "
+                            f"{stats['files_indexed']} files converted to {stats['chunks_created']} semantic chunks."
                         )
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Failed to index repository: {e}")
+                        st.error(f"Error during folder indexing: {e}")
 
-    if load_sample_clicked:
-        if not os.path.exists("sample_repo"):
-            st.error("Sample repository folder 'sample_repo' not found.")
-        else:
-            with st.spinner("Indexing sample repository files into FAISS..."):
-                try:
-                    stats = pipeline.index_from_directory(
-                        "sample_repo",
-                        chunk_size=settings["chunk_size"],
-                        chunk_overlap=settings["chunk_overlap"],
-                    )
-                    st.success(
-                        f"Sample repository indexed: {stats['files_indexed']} files, {stats['chunks_created']} chunks!"
-                    )
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Failed to index sample repo: {e}")
+    # --- TAB 2: UPLOAD ZIP ARCHIVE ---
+    with tab_zip:
+        st.markdown("Upload a downloaded repository archive (e.g. GitHub 'Download ZIP' or your zipped project folder).")
+        uploaded_zip = st.file_uploader(
+            "Upload repository .zip archive",
+            type=["zip"],
+            help="Upload a .zip file containing the entire repository tree.",
+        )
+
+        if st.button("🚀 Index ZIP Repository", type="primary", key="index_zip_btn"):
+            if uploaded_zip is None:
+                st.warning("Please upload a .zip file first.")
+            else:
+                with st.spinner("Extracting repository tree and building FAISS vector store..."):
+                    try:
+                        stats = pipeline.index_from_zip(
+                            uploaded_zip,
+                            chunk_size=settings["chunk_size"],
+                            chunk_overlap=settings["chunk_overlap"],
+                        )
+                        st.success(
+                            f"🎉 ZIP repository indexed successfully! "
+                            f"{stats['files_indexed']} files converted to {stats['chunks_created']} chunks."
+                        )
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to index ZIP archive: {e}")
+
+    # --- TAB 3: UPLOAD LOOSE FILES ---
+    with tab_files:
+        st.markdown("Select individual source/documentation files manually.")
+        uploaded_files = st.file_uploader(
+            "Select individual files to index",
+            accept_multiple_files=True,
+            type=["py", "js", "jsx", "ts", "tsx", "html", "css", "md", "txt", "json", "java", "cpp", "c", "sql"],
+        )
+
+        if st.button("🚀 Index Selected Files", type="primary", key="index_files_btn"):
+            if not uploaded_files:
+                st.warning("Please upload repository files first.")
+            else:
+                with st.spinner("Processing files and building FAISS index..."):
+                    docs = load_from_uploaded_files(uploaded_files)
+                    if not docs:
+                        st.error("No valid supported files found in upload.")
+                    else:
+                        try:
+                            stats = pipeline.index_documents(
+                                docs,
+                                chunk_size=settings["chunk_size"],
+                                chunk_overlap=settings["chunk_overlap"],
+                            )
+                            st.success(
+                                f"🎉 Indexed {stats['files_indexed']} files into {stats['chunks_created']} chunks!"
+                            )
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed to index files: {e}")
 
     st.markdown("---")
 
@@ -224,14 +292,14 @@ def main():
     if q_col4.button("💳 Payment gateway test", use_container_width=True):
         st.session_state["selected_query"] = "How does this project process credit card payments?"
 
-    current_query_value = st.session_state["selected_query"]
+    current_query_value = st.session_state.get("selected_query", "")
     user_query = st.text_input(
         "Enter your question about the repository:",
         value=current_query_value,
         placeholder="e.g., How is authentication implemented? Which file handles database connection?",
     )
 
-    ask_btn = st.button("🤖 Ask AI", use_container_width=False)
+    ask_btn = st.button("🤖 Ask AI", type="primary")
 
     if ask_btn:
         if not user_query.strip():
@@ -250,7 +318,7 @@ def main():
                 st.session_state["last_result"] = result
 
     # Display Query Results
-    if st.session_state["last_result"]:
+    if st.session_state.get("last_result"):
         result = st.session_state["last_result"]
 
         st.markdown("---")

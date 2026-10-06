@@ -1,6 +1,7 @@
 """Tests for File Loader module (Phase 2)."""
 
 import io
+import zipfile
 from src.loader import (
     is_supported_file,
     is_ignored_path,
@@ -8,6 +9,8 @@ from src.loader import (
     create_document_from_text,
     load_from_uploaded_files,
     load_from_directory,
+    load_from_zip,
+    scan_directory_summary,
 )
 
 
@@ -88,3 +91,37 @@ def test_load_from_sample_repo_directory():
     assert any("middleware.js" in s for s in sources)
     assert any("database.js" in s for s in sources)
     assert any("server.js" in s for s in sources)
+
+
+def test_scan_directory_summary():
+    summary = scan_directory_summary("sample_repo")
+    assert summary["exists"] is True
+    assert summary["file_count"] >= 5
+    assert any("backend/auth.js" in f for f in summary["supported_files"])
+
+    bad_summary = scan_directory_summary("non_existent_folder_xyz")
+    assert bad_summary["exists"] is False
+    assert bad_summary["file_count"] == 0
+
+
+def test_load_from_zip():
+    # Create an in-memory zip file
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w") as zf:
+        zf.writestr("my-repo-main/backend/auth.js", "const jwt = require('jsonwebtoken');")
+        zf.writestr("my-repo-main/backend/database.js", "const pool = new Pool();")
+        zf.writestr("my-repo-main/README.md", "# Test Zip Repo")
+        zf.writestr("my-repo-main/.git/config", "ignored git config")
+        zf.writestr("my-repo-main/node_modules/pkg/index.js", "ignored node_modules")
+        zf.writestr("my-repo-main/image.png", b"\x89PNG\r\n\x1a\n")
+
+    docs = load_from_zip(zip_buffer.getvalue())
+    assert len(docs) == 3
+    sources = [d.metadata["source"] for d in docs]
+    assert "backend/auth.js" in sources
+    assert "backend/database.js" in sources
+    assert "README.md" in sources
+    # Verify node_modules, .git, and png were ignored
+    assert not any("node_modules" in s for s in sources)
+    assert not any(".git" in s for s in sources)
+
