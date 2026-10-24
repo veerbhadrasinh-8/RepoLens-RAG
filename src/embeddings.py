@@ -26,7 +26,33 @@ except ImportError:
 DEFAULT_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
 # Module-level cache to avoid reloading the model weights on repeated calls
-_cached_embeddings: Optional[HuggingFaceEmbeddings] = None
+_cached_embeddings = None
+_active_model_desc: str = DEFAULT_MODEL_NAME
+
+
+def get_hf_token() -> Optional[str]:
+    """Retrieve Hugging Face token from environment variables or Streamlit secrets."""
+    token = (
+        os.getenv("HF_TOKEN")
+        or os.getenv("HUGGINGFACE_TOKEN")
+        or os.getenv("HUGGINGFACEHUB_API_TOKEN")
+    )
+    if not token:
+        try:
+            import streamlit as st
+            if hasattr(st, "secrets"):
+                token = (
+                    st.secrets.get("HF_TOKEN")
+                    or st.secrets.get("HUGGINGFACE_TOKEN")
+                    or st.secrets.get("HUGGINGFACEHUB_API_TOKEN")
+                )
+        except Exception:
+            pass
+    if token:
+        token = str(token).strip()
+        if token and not token.startswith("your_"):
+            return token
+    return None
 
 
 def is_model_cached(model_name: str) -> bool:
@@ -41,37 +67,99 @@ def is_model_cached(model_name: str) -> bool:
         return False
 
 
-def get_embedding_model(model_name: str = DEFAULT_MODEL_NAME) -> HuggingFaceEmbeddings:
-    """Load or retrieve the cached Hugging Face embedding model.
+def get_active_embedding_desc() -> str:
+    """Return description of the current embedding model."""
+    global _active_model_desc
+    return _active_model_desc
 
-    Runs locally using PyTorch and SentenceTransformers.
-    - If cached locally, loads directly with local_files_only=True for instant offline loading.
-    - If not yet cached (e.g., initial deployment on Streamlit Cloud), downloads the model.
+
+def get_embedding_model(model_name: str = DEFAULT_MODEL_NAME):
+    """Load or retrieve the cached embedding model.
+
+    Multi-tier resilient loading strategy:
+    1. Fast Local: If model files are cached locally on disk, load offline with zero network overhead.
+    2. Online HuggingFace: If not cached, attempt downloading from Hugging Face Hub (using HF_TOKEN if available).
+    3. HF Mirror Fallback: If huggingface.co is unreachable, retry via the hf-mirror endpoint.
+    4. Gemini Cloud Fallback: If Hugging Face is blocked/rate-limited by the host, fall back to
+       Google Gemini text-embedding-004 using the configured GEMINI_API_KEY.
     """
-    global _cached_embeddings
-    if _cached_embeddings is None:
-        model_kwargs = {"device": "cpu"}
-        if is_model_cached(model_name):
-            model_kwargs["local_files_only"] = True
+    global _cached_embeddings, _active_model_desc
+    if _cached_embeddings is not None:
+        return _cached_embeddings
 
+    hf_token = get_hf_token()
+    base_kwargs = {"device": "cpu"}
+    if hf_token:
+        base_kwargs["token"] = hf_token
+
+    # Tier 1: Fast local load if already cached
+    if is_model_cached(model_name):
         try:
+            local_kwargs = dict(base_kwargs)
+            local_kwargs["local_files_only"] = True
             _cached_embeddings = HuggingFaceEmbeddings(
                 model_name=model_name,
-                model_kwargs=model_kwargs,
+                model_kwargs=local_kwargs,
                 encode_kwargs={"normalize_embeddings": True},
             )
+            _active_model_desc = f"{model_name} (Local)"
+            return _cached_embeddings
         except Exception:
-            # If local_files_only failed (e.g. corrupted/partial cache), retry online
-            if model_kwargs.get("local_files_only"):
-                _cached_embeddings = HuggingFaceEmbeddings(
-                    model_name=model_name,
-                    model_kwargs={"device": "cpu"},
-                    encode_kwargs={"normalize_embeddings": True},
-                )
-            else:
-                raise
+            pass
 
-    return _cached_embeddings
+    # Tier 2: Online Hugging Face Hub download
+    try:
+        _cached_embeddings = HuggingFaceEmbeddings(
+            model_name=model_name,
+            model_kwargs=base_kwargs,
+            encode_kwargs={"normalize_embeddings": True},
+        )
+        _active_model_desc = f"{model_name} (Hugging Face)"
+        return _cached_embeddings
+    except Exception:
+        pass
+
+    # Tier 3: Hugging Face Mirror fallback (bypasses direct huggingface.co IP restrictions)
+    orig_endpoint = os.environ.get("HF_ENDPOINT")
+    try:
+        os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+        _cached_embeddings = HuggingFaceEmbeddings(
+            model_name=model_name,
+            model_kwargs=base_kwargs,
+            encode_kwargs={"normalize_embeddings": True},
+        )
+        _active_model_desc = f"{model_name} (HF Mirror)"
+        return _cached_embeddings
+    except Exception:
+        pass
+    finally:
+        if orig_endpoint is not None:
+            os.environ["HF_ENDPOINT"] = orig_endpoint
+        else:
+            os.environ.pop("HF_ENDPOINT", None)
+
+    # Tier 4: Google Gemini Embeddings fallback (reliable cloud API, never blocked on Streamlit Cloud)
+    from src.llm import get_gemini_api_key
+    gemini_key = get_gemini_api_key()
+    if gemini_key:
+        try:
+            from langchain_google_genai import GoogleGenerativeAIEmbeddings
+            _cached_embeddings = GoogleGenerativeAIEmbeddings(
+                model="models/text-embedding-004",
+                google_api_key=gemini_key,
+            )
+            _active_model_desc = "Gemini text-embedding-004 (Google AI Cloud)"
+            return _cached_embeddings
+        except Exception:
+            pass
+
+    # Tier 5: Informative actionable error
+    raise RuntimeError(
+        f"Could not connect to Hugging Face Hub to download '{model_name}'.\n"
+        "Streamlit Cloud network restrictions or rate limits blocked the download.\n"
+        "To resolve this, please enter your GEMINI_API_KEY in the sidebar (or Streamlit Secrets) "
+        "to enable cloud embeddings, or provide an HF_TOKEN."
+    )
 
 
 def embed_documents(texts: List[str], model_name: str = DEFAULT_MODEL_NAME) -> List[List[float]]:

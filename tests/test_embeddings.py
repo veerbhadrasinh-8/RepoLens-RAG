@@ -83,3 +83,33 @@ def test_cached_failure_retries_online():
     finally:
         embeddings._cached_embeddings = old_cached
 
+
+def test_gemini_fallback_when_hf_fails():
+    from unittest.mock import patch
+    from src import embeddings
+
+    old_cached = embeddings._cached_embeddings
+    try:
+        embeddings._cached_embeddings = None
+        with patch("src.embeddings.is_model_cached", return_value=False), \
+             patch("src.embeddings.HuggingFaceEmbeddings", side_effect=OSError("Cannot reach huggingface.co")), \
+             patch("src.llm.get_gemini_api_key", return_value="fake-gemini-key"), \
+             patch("langchain_google_genai.GoogleGenerativeAIEmbeddings") as mock_gemini:
+            mock_gemini.return_value = "gemini_embeddings_instance"
+            model = embeddings.get_embedding_model()
+            assert model == "gemini_embeddings_instance"
+            assert "Gemini" in embeddings.get_active_embedding_desc()
+    finally:
+        embeddings._cached_embeddings = old_cached
+
+
+def test_rag_pipeline_lazy_embedding():
+    from src.rag_pipeline import RepoLensPipeline
+    pipeline = RepoLensPipeline(index_dir="non_existent_test_dir_123")
+    assert pipeline._embedding_model is None
+    # Accessing property initializes embedding
+    model = pipeline.embedding_model
+    assert model is not None
+    assert pipeline._embedding_model is not None
+
+

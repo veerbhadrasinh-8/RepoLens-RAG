@@ -55,12 +55,7 @@ st.markdown("""
 
 # Initialize Session State
 if "pipeline" not in st.session_state:
-    try:
-        with st.spinner("Initializing RepoLens RAG pipeline and embedding model..."):
-            st.session_state["pipeline"] = RepoLensPipeline()
-    except Exception as e:
-        st.error(f"Failed to initialize embedding model: {e}")
-        st.stop()
+    st.session_state["pipeline"] = RepoLensPipeline()
 if "last_result" not in st.session_state:
     st.session_state["last_result"] = None
 if "selected_query" not in st.session_state:
@@ -115,9 +110,25 @@ def render_sidebar():
     st.sidebar.markdown("---")
     st.sidebar.subheader("🔑 API Key Status")
     if is_gemini_configured():
-        st.sidebar.success("✅ GEMINI_API_KEY detected")
+        st.sidebar.success("✅ GEMINI_API_KEY active")
     else:
-        st.sidebar.warning("⚠️ GEMINI_API_KEY is not configured.\nPlease add GEMINI_API_KEY in .env or Streamlit Secrets.")
+        st.sidebar.warning("⚠️ GEMINI_API_KEY is not configured.")
+        input_key = st.sidebar.text_input(
+            "Enter Gemini API Key:",
+            type="password",
+            placeholder="Paste your key from Google AI Studio",
+            help="Get your free key from https://aistudio.google.com/app/apikey",
+        )
+        if input_key and input_key.strip():
+            os.environ["GEMINI_API_KEY"] = input_key.strip()
+            # Clear cached embeddings to allow re-initialization with Gemini fallback if needed
+            from src import embeddings
+            embeddings._cached_embeddings = None
+            st.sidebar.success("✅ API key set! Refreshing...")
+            st.rerun()
+
+    from src.embeddings import get_active_embedding_desc
+    st.sidebar.caption(f"🧠 **Embeddings:** `{get_active_embedding_desc()}`")
 
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 🏛️ RAG Mental Model")

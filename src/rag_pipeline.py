@@ -43,16 +43,30 @@ class RepoLensPipeline:
         embedding_model=None,
     ):
         self.index_dir = index_dir
-        self.embedding_model = embedding_model or get_embedding_model()
+        self._embedding_model = embedding_model
         self.vector_store: Optional[FAISS] = None
         self.indexed_files_count: int = 0
         self.indexed_chunks_count: int = 0
 
         # Attempt to load any existing persisted index on initialization
         if vector_store_exists(self.index_dir):
-            loaded = load_vector_store(self.index_dir, self.embedding_model)
-            if loaded is not None:
-                self.vector_store = loaded
+            try:
+                loaded = load_vector_store(self.index_dir, self.embedding_model)
+                if loaded is not None:
+                    self.vector_store = loaded
+            except Exception:
+                pass
+
+    @property
+    def embedding_model(self):
+        """Lazy-loaded embedding model."""
+        if self._embedding_model is None:
+            self._embedding_model = get_embedding_model()
+        return self._embedding_model
+
+    @embedding_model.setter
+    def embedding_model(self, model):
+        self._embedding_model = model
 
     def is_indexed(self) -> bool:
         """Return True if an active vector store is ready for queries."""
