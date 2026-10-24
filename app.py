@@ -55,7 +55,12 @@ st.markdown("""
 
 # Initialize Session State
 if "pipeline" not in st.session_state:
-    st.session_state["pipeline"] = RepoLensPipeline()
+    try:
+        with st.spinner("Initializing RepoLens RAG pipeline and embedding model..."):
+            st.session_state["pipeline"] = RepoLensPipeline()
+    except Exception as e:
+        st.error(f"Failed to initialize embedding model: {e}")
+        st.stop()
 if "last_result" not in st.session_state:
     st.session_state["last_result"] = None
 if "selected_query" not in st.session_state:
@@ -110,9 +115,9 @@ def render_sidebar():
     st.sidebar.markdown("---")
     st.sidebar.subheader("🔑 API Key Status")
     if is_gemini_configured():
-        st.sidebar.success("✅ GEMINI_API_KEY detected in .env")
+        st.sidebar.success("✅ GEMINI_API_KEY detected")
     else:
-        st.sidebar.warning("⚠️ GEMINI_API_KEY is not configured.\nPlease add GEMINI_API_KEY to .env.")
+        st.sidebar.warning("⚠️ GEMINI_API_KEY is not configured.\nPlease add GEMINI_API_KEY in .env or Streamlit Secrets.")
 
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 🏛️ RAG Mental Model")

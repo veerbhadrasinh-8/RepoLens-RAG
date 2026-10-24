@@ -29,16 +29,24 @@ class GeminiAPIKeyError(Exception):
 
 
 def get_gemini_api_key() -> Optional[str]:
-    """Retrieve the Gemini API key from environment variables.
+    """Retrieve the Gemini API key from environment variables or Streamlit secrets.
 
-    Checks GEMINI_API_KEY first, followed by GOOGLE_API_KEY.
+    Checks GEMINI_API_KEY first, followed by GOOGLE_API_KEY, and streamlit.secrets.
     Filters out empty strings or example template placeholders.
     """
     key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if not key:
+        try:
+            import streamlit as st
+            if hasattr(st, "secrets"):
+                key = st.secrets.get("GEMINI_API_KEY") or st.secrets.get("GOOGLE_API_KEY")
+        except Exception:
+            pass
+
+    if not key:
         return None
 
-    cleaned_key = key.strip()
+    cleaned_key = str(key).strip()
     if not cleaned_key or cleaned_key.startswith("your_") or "your_key" in cleaned_key:
         return None
 

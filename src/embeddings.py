@@ -18,10 +18,6 @@ Why Embeddings are Used in RAG:
 import os
 from typing import List, Optional
 
-# Prefer local cached models to avoid network timeout delays during offline/sandbox execution
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
-os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-
 try:
     from langchain_huggingface import HuggingFaceEmbeddings
 except ImportError:
@@ -33,18 +29,48 @@ DEFAULT_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 _cached_embeddings: Optional[HuggingFaceEmbeddings] = None
 
 
+def is_model_cached(model_name: str) -> bool:
+    """Check if model files are already available locally or in HuggingFace cache."""
+    if os.path.isdir(model_name):
+        return True
+    try:
+        from huggingface_hub import try_to_load_from_cache
+        res = try_to_load_from_cache(model_name, "config.json")
+        return isinstance(res, str) and os.path.exists(res)
+    except Exception:
+        return False
+
+
 def get_embedding_model(model_name: str = DEFAULT_MODEL_NAME) -> HuggingFaceEmbeddings:
     """Load or retrieve the cached Hugging Face embedding model.
 
     Runs locally using PyTorch and SentenceTransformers.
+    - If cached locally, loads directly with local_files_only=True for instant offline loading.
+    - If not yet cached (e.g., initial deployment on Streamlit Cloud), downloads the model.
     """
     global _cached_embeddings
     if _cached_embeddings is None:
-        _cached_embeddings = HuggingFaceEmbeddings(
-            model_name=model_name,
-            model_kwargs={"device": "cpu"},
-            encode_kwargs={"normalize_embeddings": True},
-        )
+        model_kwargs = {"device": "cpu"}
+        if is_model_cached(model_name):
+            model_kwargs["local_files_only"] = True
+
+        try:
+            _cached_embeddings = HuggingFaceEmbeddings(
+                model_name=model_name,
+                model_kwargs=model_kwargs,
+                encode_kwargs={"normalize_embeddings": True},
+            )
+        except Exception:
+            # If local_files_only failed (e.g. corrupted/partial cache), retry online
+            if model_kwargs.get("local_files_only"):
+                _cached_embeddings = HuggingFaceEmbeddings(
+                    model_name=model_name,
+                    model_kwargs={"device": "cpu"},
+                    encode_kwargs={"normalize_embeddings": True},
+                )
+            else:
+                raise
+
     return _cached_embeddings
 
 
