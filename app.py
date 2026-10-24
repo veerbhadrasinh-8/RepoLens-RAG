@@ -107,15 +107,6 @@ def render_sidebar():
         index=0,
     )
 
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("🔑 API Key Status")
-    if is_gemini_configured():
-        st.sidebar.success("✅ GEMINI_API_KEY detected")
-    else:
-        st.sidebar.warning("⚠️ GEMINI_API_KEY is not configured.\nPlease add GEMINI_API_KEY in Streamlit Cloud Secrets.")
-
-    from src.embeddings import get_active_embedding_desc
-    st.sidebar.caption(f"🧠 **Embeddings:** `{get_active_embedding_desc()}`")
 
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 🏛️ RAG Mental Model")
