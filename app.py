@@ -110,22 +110,9 @@ def render_sidebar():
     st.sidebar.markdown("---")
     st.sidebar.subheader("🔑 API Key Status")
     if is_gemini_configured():
-        st.sidebar.success("✅ GEMINI_API_KEY active")
+        st.sidebar.success("✅ GEMINI_API_KEY detected")
     else:
-        st.sidebar.warning("⚠️ GEMINI_API_KEY is not configured.")
-        input_key = st.sidebar.text_input(
-            "Enter Gemini API Key:",
-            type="password",
-            placeholder="Paste your key from Google AI Studio",
-            help="Get your free key from https://aistudio.google.com/app/apikey",
-        )
-        if input_key and input_key.strip():
-            os.environ["GEMINI_API_KEY"] = input_key.strip()
-            # Clear cached embeddings to allow re-initialization with Gemini fallback if needed
-            from src import embeddings
-            embeddings._cached_embeddings = None
-            st.sidebar.success("✅ API key set! Refreshing...")
-            st.rerun()
+        st.sidebar.warning("⚠️ GEMINI_API_KEY is not configured.\nPlease add GEMINI_API_KEY in Streamlit Cloud Secrets.")
 
     from src.embeddings import get_active_embedding_desc
     st.sidebar.caption(f"🧠 **Embeddings:** `{get_active_embedding_desc()}`")
